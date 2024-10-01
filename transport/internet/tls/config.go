@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -194,6 +195,16 @@ func (c *Config) verifyPeerCert(rawCerts [][]byte, verifiedChains [][]*x509.Cert
 	return nil
 }
 
+type alwaysFlushWriter struct {
+	file *os.File
+}
+
+func (a *alwaysFlushWriter) Write(p []byte) (n int, err error) {
+	n, err = a.file.Write(p)
+	a.file.Sync()
+	return n, err
+}
+
 // GetTLSConfig converts this Config into tls.Config.
 func (c *Config) GetTLSConfig(opts ...Option) *tls.Config {
 	root, err := c.getCertPool()
@@ -224,6 +235,10 @@ func (c *Config) GetTLSConfig(opts ...Option) *tls.Config {
 		SessionTicketsDisabled: !c.EnableSessionResumption,
 		VerifyPeerCertificate:  c.verifyPeerCert,
 		ClientCAs:              clientRoot,
+	}
+
+	if c.AllowInsecureIfPinnedPeerCertificate && c.PinnedPeerCertificateChainSha256 != nil {
+		config.InsecureSkipVerify = true
 	}
 
 	for _, opt := range opts {
@@ -271,6 +286,14 @@ func (c *Config) GetTLSConfig(opts ...Option) *tls.Config {
 	case Config_TLS1_3:
 		config.MaxVersion = tls.VersionTLS13
 	}
+
+	if len(c.EchConfig) > 0 || len(c.Ech_DOHserver) > 0 {
+		err := ApplyECH(c, config)
+		if err != nil {
+			newError("unable to set ECH").AtError().Base(err).WriteToLog()
+		}
+	}
+
 	return config
 }
 
